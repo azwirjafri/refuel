@@ -11,7 +11,7 @@ const formatters = {
   compactCurrency:value=>new Intl.NumberFormat(config.locale,{style:"currency",currency:config.currency,notation:"compact",maximumFractionDigits:1}).format(value),
   number:(value,digits=0)=>new Intl.NumberFormat(config.locale,{minimumFractionDigits:digits,maximumFractionDigits:digits}).format(value),
   date:value=>new Intl.DateTimeFormat(config.locale,{day:"numeric",month:"short",year:"numeric"}).format(value),
-  shortMonth:value=>new Intl.DateTimeFormat(config.locale,{month:"short",year:"2-digit"}).format(value),
+  shortMonth:value=>new Intl.DateTimeFormat(config.locale,{month:"short"}).format(value),
   longMonth:value=>new Intl.DateTimeFormat(config.locale,{month:"long",year:"numeric"}).format(value)
 };
 const chart = new TrendChart($("#chart-canvas"),$("#chart-tooltip"),$("#chart-fallback"),formatters);

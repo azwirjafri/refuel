@@ -141,16 +141,11 @@ export class TrendChart {
     ctx.fillStyle = colors.muted;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    const labelEvery = Math.max(1, Math.ceil(this.data.length / (width < 520 ? 4 : 9)));
-    let previousYear = null;
+    const labelEvery = Math.max(1, Math.ceil(this.data.length / (width < 520 ? 5 : 12)));
     this.data.forEach((item, index) => {
-      const year = item.date.getFullYear();
-      const yearChanged = year !== previousYear;
-      previousYear = year;
-      const show = index % labelEvery === 0 || index === this.data.length - 1 || yearChanged;
-      if (!show) return;
+      if (index % labelEvery !== 0 && index !== this.data.length - 1) return;
       const x = pad.left + slot * index + slot / 2;
-      ctx.fillText(yearChanged ? `${this.formatters.shortMonth(item.date)} ${year}` : this.formatters.shortMonth(item.date), x, height - pad.bottom + 14);
+      ctx.fillText(this.formatters.shortMonth(item.date), x, height - pad.bottom + 14);
     });
   }
 
