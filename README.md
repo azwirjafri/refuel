@@ -11,6 +11,8 @@ A lightweight, dependency-free dashboard for petrol refuel data stored in Google
 - Like-for-like comparison against the same months one year earlier
 - Cost-change explanation split into volume and price effects
 - Per-vehicle summary with spend share, litres, refuels, and fuel used per day
+- Latest recorded month overview with previous-month comparison and latest-data date
+- Average monthly spend, average cost per refuel, and average refuels per active month
 - Dynamic summary and previous-period comparison
 - Fuel or vehicle cost breakdown
 - Data-quality notes for duplicate and unusually small refuels

@@ -5,7 +5,9 @@ import {
   normalizeRows,
   filterRows,
   aggregateByMonth,
-  calculateSummary
+  calculateSummary,
+  calculateBudget,
+  monthlyComparison
 } from "../js/data.js";
 
 test("parses quoted CSV fields and escaped quotes", () => {
@@ -55,4 +57,30 @@ test("filters records and groups monthly totals", () => {
   assert.equal(monthly.length, 1);
   assert.equal(monthly[0].cost, 30);
   assert.equal(monthly[0].liters, 15);
+});
+
+test("calculates cost per visit and days between refuels", () => {
+  const rows = [
+    { date: new Date(2026, 5, 1), totalCost: 40 },
+    { date: new Date(2026, 5, 11), totalCost: 60 },
+    { date: new Date(2026, 5, 31), totalCost: 50 }
+  ];
+  assert.deepEqual(calculateBudget(rows), { averageCostPerVisit: 50, averageDaysBetween: 15 });
+  assert.equal(calculateBudget(rows.slice(0, 1)).averageDaysBetween, null);
+  assert.equal(calculateBudget([]).averageCostPerVisit, 0);
+  const dstRows = [{ date: new Date(2026, 2, 8), totalCost: 20 }, { date: new Date(2026, 2, 9), totalCost: 20 }];
+  assert.equal(calculateBudget(dstRows).averageDaysBetween, 1);
+});
+
+test("compares the latest month with the preceding month", () => {
+  const rows = [
+    { date: new Date(2026, 4, 1), liters: 10, totalCost: 20, fullTank: true },
+    { date: new Date(2026, 5, 10), liters: 20, totalCost: 50, fullTank: true },
+    { date: new Date(2026, 5, 20), liters: 10, totalCost: 30, fullTank: false }
+  ];
+  const comparison = monthlyComparison(rows, rows.slice(0, 1));
+  assert.equal(comparison.current.cost, 80);
+  assert.equal(comparison.previous.cost, 20);
+  assert.equal(comparison.current.visits, 2);
+  assert.equal(monthlyComparison([], []).current, null);
 });

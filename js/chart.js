@@ -2,6 +2,7 @@ const METRICS = {
   cost: { key: "cost", label: "Fuel spending", unit: "currency" },
   liters: { key: "liters", label: "Litres added", unit: "liters" },
   price: { key: "price", label: "Price per litre", unit: "currency" },
+  visits: { key: "visits", label: "Refuel visits", unit: "number" },
   perDay: { key: "perDay", label: "Cost per day", unit: "currency" }
 };
 
@@ -27,6 +28,7 @@ export class TrendChart {
   }
 
   setData(data, metric, smoothed = false) {
+    this.hideTooltip();
     this.data = data;
     this.metric = metric;
     this.smoothed = smoothed;
@@ -74,9 +76,9 @@ export class TrendChart {
       muted: styles.getPropertyValue("--muted").trim(),
       line: styles.getPropertyValue("--line").trim(),
       green: styles.getPropertyValue("--green").trim(),
-      greenDark: styles.getPropertyValue("--green-dark").trim(),
-      lime: styles.getPropertyValue("--lime").trim(),
-      orange: styles.getPropertyValue("--orange").trim()
+      greenDark: styles.getPropertyValue("--green").trim(),
+      lime: styles.getPropertyValue("--coral").trim(),
+      orange: styles.getPropertyValue("--coral").trim()
     };
     const pad = { top: 20, right: 14, bottom: 44, left: width < 520 ? 45 : 60 };
     const plotWidth = Math.max(1, width - pad.left - pad.right);
