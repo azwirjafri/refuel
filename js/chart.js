@@ -1,7 +1,8 @@
 const METRICS = {
   cost: { key: "cost", label: "Fuel spending", unit: "currency" },
   liters: { key: "liters", label: "Litres added", unit: "liters" },
-  price: { key: "price", label: "Price per litre", unit: "currency" }
+  price: { key: "price", label: "Price per litre", unit: "currency" },
+  visits: { key: "visits", label: "Refuel visits", unit: "number" }
 };
 
 export class TrendChart {
@@ -25,6 +26,7 @@ export class TrendChart {
   }
 
   setData(data, metric) {
+    this.hideTooltip();
     this.data = data;
     this.metric = metric;
     this.fallback.textContent = this.describe();
@@ -70,8 +72,8 @@ export class TrendChart {
       muted: styles.getPropertyValue("--muted").trim(),
       line: styles.getPropertyValue("--line").trim(),
       green: styles.getPropertyValue("--green").trim(),
-      greenDark: styles.getPropertyValue("--green-dark").trim(),
-      lime: styles.getPropertyValue("--lime").trim()
+      greenDark: styles.getPropertyValue("--green").trim(),
+      lime: styles.getPropertyValue("--coral").trim()
     };
     const pad = { top: 20, right: 14, bottom: 44, left: width < 520 ? 45 : 60 };
     const plotWidth = Math.max(1, width - pad.left - pad.right);
@@ -176,12 +178,14 @@ export class TrendChart {
   axisFormat(value) {
     if (this.metric === "cost") return this.formatters.compactCurrency(value);
     if (this.metric === "price") return value.toFixed(2);
+    if (this.metric === "visits") return Math.round(value).toString();
     return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : Math.round(value).toString();
   }
 
   valueFormat(value) {
     if (this.metric === "cost") return this.formatters.currency(value);
     if (this.metric === "price") return `${this.formatters.currency(value)} / L`;
+    if (this.metric === "visits") return `${this.formatters.number(value)} refuel${value === 1 ? "" : "s"}`;
     return `${this.formatters.number(value, 1)} L`;
   }
 

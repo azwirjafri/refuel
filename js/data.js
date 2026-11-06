@@ -177,6 +177,23 @@ export function calculateSummary(rows) {
   };
 }
 
+export function calculateBudget(rows) {
+  const sorted = [...rows].sort((a, b) => a.date - b.date);
+  const intervals = sorted.slice(1).map((row, index) => (Date.UTC(row.date.getFullYear(), row.date.getMonth(), row.date.getDate()) - Date.UTC(sorted[index].date.getFullYear(), sorted[index].date.getMonth(), sorted[index].date.getDate())) / 86400000);
+  return {
+    averageCostPerVisit: rows.length ? rows.reduce((sum, row) => sum + row.totalCost, 0) / rows.length : 0,
+    averageDaysBetween: intervals.length ? intervals.reduce((sum, days) => sum + days, 0) / intervals.length : null
+  };
+}
+
+export function monthlyComparison(rows, previousRows) {
+  const months = aggregateByMonth(rows);
+  return {
+    current: months.at(-1) || null,
+    previous: aggregateByMonth(previousRows).at(-1) || null
+  };
+}
+
 export function groupCost(rows, field) {
   const totals = new Map();
   rows.forEach(row => totals.set(row[field], (totals.get(row[field]) || 0) + row.totalCost));

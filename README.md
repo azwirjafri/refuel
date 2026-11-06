@@ -1,4 +1,4 @@
-# Fuel Ledger Dashboard
+# Refuel — V2 Monthly Budget Dashboard
 
 A lightweight, dependency-free dashboard for petrol refuel data stored in Google Sheets. It is designed for GitHub Pages and performs all filtering and chart rendering in the browser.
 
@@ -7,8 +7,10 @@ A lightweight, dependency-free dashboard for petrol refuel data stored in Google
 - Duration presets and custom date range
 - Vehicle and fuel-type filters
 - Monthly cost, litres, and price-per-litre chart
-- Dynamic summary and previous-period comparison
-- Fuel or vehicle cost breakdown
+- Latest recorded month overview with previous-month comparison and latest-data date
+- Average monthly spend, average cost per refuel, and average refuels per active month
+- Monthly spending, weighted price-per-litre, and refuel-frequency charts
+- Vehicle or fuel-type cost breakdown
 - Latest matching refuel records
 - Responsive layout, accessible controls, and reduced-motion support
 - No analytics, cookies, API keys, or third-party runtime dependencies
