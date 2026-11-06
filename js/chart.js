@@ -1,7 +1,8 @@
 const METRICS = {
   cost: { key: "cost", label: "Fuel spending", unit: "currency" },
   liters: { key: "liters", label: "Litres added", unit: "liters" },
-  price: { key: "price", label: "Price per litre", unit: "currency" }
+  price: { key: "price", label: "Price per litre", unit: "currency" },
+  perDay: { key: "perDay", label: "Cost per day", unit: "currency" }
 };
 
 export class TrendChart {
@@ -14,6 +15,7 @@ export class TrendChart {
     this.points = [];
     this.data = [];
     this.metric = "cost";
+    this.smoothed = false;
     this.animationFrame = null;
     this.hoverFrame = null;
     this.hasRendered = false;
@@ -24,11 +26,13 @@ export class TrendChart {
     canvas.addEventListener("pointerleave", () => this.hideTooltip());
   }
 
-  setData(data, metric) {
+  setData(data, metric, smoothed = false) {
     this.data = data;
     this.metric = metric;
+    this.smoothed = smoothed;
     this.fallback.textContent = this.describe();
-    this.canvas.setAttribute("aria-label", `${METRICS[metric].label} by month`);
+    const label = METRICS[metric].label;
+    this.canvas.setAttribute("aria-label", `${label} by month${smoothed ? ", with a three-month rolling average" : ""}`);
     if (!this.hasRendered || this.reducedMotion) {
       this.draw(1);
       this.hasRendered = true;
@@ -71,14 +75,16 @@ export class TrendChart {
       line: styles.getPropertyValue("--line").trim(),
       green: styles.getPropertyValue("--green").trim(),
       greenDark: styles.getPropertyValue("--green-dark").trim(),
-      lime: styles.getPropertyValue("--lime").trim()
+      lime: styles.getPropertyValue("--lime").trim(),
+      orange: styles.getPropertyValue("--orange").trim()
     };
     const pad = { top: 20, right: 14, bottom: 44, left: width < 520 ? 45 : 60 };
     const plotWidth = Math.max(1, width - pad.left - pad.right);
     const plotHeight = Math.max(1, height - pad.top - pad.bottom);
     const metric = METRICS[this.metric];
     const values = this.data.map(item => item[metric.key]);
-    const maxValue = niceMaximum(Math.max(...values, 0));
+    const smoothValues = this.smoothed ? this.data.map(item => item.smooth).filter(value => value !== null && value !== undefined) : [];
+    const maxValue = niceMaximum(Math.max(...values, ...smoothValues, 0));
 
     ctx.font = "12px Inter, system-ui, sans-serif";
     ctx.textBaseline = "middle";
@@ -115,24 +121,56 @@ export class TrendChart {
       const barHeight = targetHeight * progress;
       const x = pad.left + slot * index + slot / 2;
       const y = pad.top + plotHeight - barHeight;
+      if (!item.hasData) {
+        this.points.push({ x, y: pad.top + plotHeight, width: Math.max(slot, barWidth), item, value: null, hasData: false });
+        return;
+      }
       const gradient = ctx.createLinearGradient(0, y, 0, pad.top + plotHeight);
       gradient.addColorStop(0, colors.green);
       gradient.addColorStop(1, colors.greenDark);
       ctx.fillStyle = gradient;
       roundRect(ctx, x - barWidth / 2, y, barWidth, Math.max(2, barHeight), Math.min(8, barWidth / 2));
       ctx.fill();
-      this.points.push({ x, y, width: Math.max(slot, barWidth), item, value });
+      this.points.push({ x, y, width: Math.max(slot, barWidth), item, value, hasData: true });
     });
+
+    if (this.smoothed) this.drawAverageLine(colors, pad, plotWidth, plotHeight, maxValue, slot, progress);
 
     ctx.fillStyle = colors.muted;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    const labelEvery = Math.max(1, Math.ceil(this.data.length / (width < 520 ? 5 : 10)));
+    const labelEvery = Math.max(1, Math.ceil(this.data.length / (width < 520 ? 4 : 9)));
+    let previousYear = null;
     this.data.forEach((item, index) => {
-      if (index % labelEvery !== 0 && index !== this.data.length - 1) return;
+      const year = item.date.getFullYear();
+      const yearChanged = year !== previousYear;
+      previousYear = year;
+      const show = index % labelEvery === 0 || index === this.data.length - 1 || yearChanged;
+      if (!show) return;
       const x = pad.left + slot * index + slot / 2;
-      ctx.fillText(this.formatters.shortMonth(item.date), x, height - pad.bottom + 14);
+      ctx.fillText(yearChanged ? `${this.formatters.shortMonth(item.date)} ${year}` : this.formatters.shortMonth(item.date), x, height - pad.bottom + 14);
     });
+  }
+
+  drawAverageLine(colors, pad, plotWidth, plotHeight, maxValue, slot, progress) {
+    const { ctx } = this;
+    const points = this.data
+      .map((item, index) => ({ item, x: pad.left + slot * index + slot / 2 }))
+      .filter(({ item }) => item.smooth !== null && item.smooth !== undefined && item.hasData);
+
+    if (points.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = colors.orange || colors.greenDark;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    points.forEach(({ item, x }, index) => {
+      const y = pad.top + plotHeight - (maxValue ? (item.smooth / maxValue) * plotHeight : 0) * progress;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.restore();
   }
 
   queueHover(event) {
@@ -154,14 +192,26 @@ export class TrendChart {
   }
 
   showTooltip(point) {
-    const label = this.formatters.longMonth(point.item.date);
-    const value = this.valueFormat(point.value);
-    this.tooltip.replaceChildren();
-    const strong = document.createElement("strong");
-    strong.textContent = value;
-    const span = document.createElement("span");
-    span.textContent = `${label} · ${point.item.visits} refuel${point.item.visits === 1 ? "" : "s"}`;
-    this.tooltip.append(strong, span);
+    if (!point.hasData) {
+      this.tooltip.replaceChildren();
+      const strong = document.createElement("strong");
+      strong.textContent = "No refuels";
+      const span = document.createElement("span");
+      span.textContent = this.formatters.longMonth(point.item.date);
+      this.tooltip.append(strong, span);
+    } else {
+      const label = this.formatters.longMonth(point.item.date);
+      const value = this.valueFormat(point.value);
+      this.tooltip.replaceChildren();
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      const span = document.createElement("span");
+      const average = this.smoothed && point.item.smooth !== null && point.item.smooth !== undefined
+        ? ` · avg ${this.valueFormat(point.item.smooth)}`
+        : "";
+      span.textContent = `${label} · ${point.item.visits} refuel${point.item.visits === 1 ? "" : "s"}${average}`;
+      this.tooltip.append(strong, span);
+    }
     this.tooltip.hidden = false;
     const containerWidth = this.canvas.getBoundingClientRect().width;
     const clampedX = Math.min(containerWidth - 82, Math.max(82, point.x));
@@ -174,13 +224,14 @@ export class TrendChart {
   }
 
   axisFormat(value) {
-    if (this.metric === "cost") return this.formatters.compactCurrency(value);
+    if (this.metric === "cost" || this.metric === "perDay") return this.formatters.compactCurrency(value);
     if (this.metric === "price") return value.toFixed(2);
     return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : Math.round(value).toString();
   }
 
   valueFormat(value) {
     if (this.metric === "cost") return this.formatters.currency(value);
+    if (this.metric === "perDay") return `${this.formatters.currency(value)} / day`;
     if (this.metric === "price") return `${this.formatters.currency(value)} / L`;
     return `${this.formatters.number(value, 1)} L`;
   }
@@ -188,8 +239,15 @@ export class TrendChart {
   describe() {
     if (!this.data.length) return "No monthly chart data is available for the selected filters.";
     const metric = METRICS[this.metric];
-    const peak = this.data.reduce((best, item) => item[metric.key] > best[metric.key] ? item : best, this.data[0]);
-    return `${metric.label} across ${this.data.length} months. The highest month is ${this.formatters.longMonth(peak.date)} at ${this.valueFormat(peak[metric.key])}.`;
+    const withData = this.data.filter(item => item.hasData);
+    if (!withData.length) return "No monthly chart data is available for the selected filters.";
+    const peak = withData.reduce((best, item) => item[metric.key] > best[metric.key] ? item : best, withData[0]);
+    const missing = this.data.length - withData.length;
+    const gapNote = missing
+      ? ` ${missing} of ${this.data.length} months have no refuel records and are shown as gaps.`
+      : "";
+    const months = `${this.data.length} month${this.data.length === 1 ? "" : "s"}`;
+    return `${metric.label} across ${months}. The highest month is ${this.formatters.longMonth(peak.date)} at ${this.valueFormat(peak[metric.key])}.${gapNote}`;
   }
 }
 

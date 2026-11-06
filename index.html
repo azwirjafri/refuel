@@ -108,26 +108,36 @@
         </article>
       </section>
 
-      <section class="chart-section" aria-labelledby="trend-heading">
-        <div class="section-heading">
-          <div>
-            <p class="section-kicker">Monthly trend</p>
-            <h2 id="trend-heading">Fuel spending</h2>
+        <div class="chart-section" aria-labelledby="trend-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Monthly trend</p>
+              <h2 id="trend-heading">Fuel spending</h2>
+            </div>
+            <div class="chart-controls">              <label class="metric-select">
+                <span class="sr-only">Chart metric</span>
+                <select id="metric-select">
+                  <option value="cost">Total cost</option>
+                  <option value="liters">Litres</option>
+                  <option value="price">Price per litre</option>
+                  <option value="perDay">Cost per day</option>
+                </select>
+              </label>
+              <label class="toggle-field">
+                <input id="trend-toggle" type="checkbox" role="switch">
+                <span>3-month average</span>
+              </label>
+            </div>
           </div>
-          <label class="metric-select">
-            <span class="sr-only">Chart metric</span>
-            <select id="metric-select">
-              <option value="cost">Total cost</option>
-              <option value="liters">Litres</option>
-              <option value="price">Price per litre</option>
-            </select>
-          </label>
-        </div>
 
         <div id="trend-chart" class="chart-wrap">
           <canvas id="chart-canvas" role="img" aria-label="Monthly fuel spending chart"></canvas>
           <div id="chart-tooltip" class="chart-tooltip" hidden></div>
           <p id="chart-fallback" class="sr-only" aria-live="polite"></p>
+        </div>
+        <div id="chart-legend" class="chart-legend" hidden>
+          <span><i></i>Monthly</span>
+          <span><i class="legend-line"></i>3-month average</span>
         </div>
       </section>
 
@@ -142,12 +152,23 @@
         <article class="breakdown-panel" aria-labelledby="breakdown-heading">
           <div class="section-heading compact">
             <div>
-              <p class="section-kicker">Cost mix</p>
+              <p class="section-kicker">By vehicle</p>
               <h2 id="breakdown-heading">Where the spend went</h2>
             </div>
           </div>
           <div id="breakdown-list" class="breakdown-list"></div>
+          <div id="vehicle-summary" class="vehicle-summary"></div>
         </article>
+      </section>
+
+      <section id="data-quality" class="data-quality" aria-labelledby="quality-heading" hidden>
+        <div class="section-heading compact">
+          <div>
+            <p class="section-kicker">Data quality</p>
+            <h2 id="quality-heading">Worth a look</h2>
+          </div>
+        </div>
+        <ul id="quality-list" class="quality-list"></ul>
       </section>
 
       <section class="records-section" aria-labelledby="records-heading">

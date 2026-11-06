@@ -5,7 +5,15 @@ import {
   aggregateByMonth,
   calculateSummary,
   groupCost,
-  previousPeriod
+  previousPeriod,
+  previousPeriodRange,
+  hasComparableHistory,
+  findNewVehicles,
+  decomposeCostChange,
+  summarizeByVehicle,
+  computeBurnRate,
+  rollingAverage,
+  findDataWarnings
 } from "./data.js";
 import { TrendChart } from "./chart.js";
 
@@ -32,6 +40,8 @@ const elements = {
   fuel: document.querySelector("#fuel-filter"),
   reset: document.querySelector("#reset-filters"),
   metric: document.querySelector("#metric-select"),
+  trendToggle: document.querySelector("#trend-toggle"),
+  chartLegend: document.querySelector("#chart-legend"),
   totalCost: document.querySelector("#total-cost"),
   costContext: document.querySelector("#cost-context"),
   totalLiters: document.querySelector("#total-liters"),
@@ -42,6 +52,9 @@ const elements = {
   analysisCopy: document.querySelector("#analysis-copy"),
   insightList: document.querySelector("#insight-list"),
   breakdownList: document.querySelector("#breakdown-list"),
+  vehicleSummary: document.querySelector("#vehicle-summary"),
+  dataQuality: document.querySelector("#data-quality"),
+  qualityList: document.querySelector("#quality-list"),
   recordCount: document.querySelector("#record-count"),
   recordsBody: document.querySelector("#records-body")
 };
@@ -81,7 +94,9 @@ const state = {
   activePeriod: config.defaultPeriod,
   minDate: null,
   maxDate: null,
-  source: "demo"
+  source: "demo",
+  hasFullTankData: false,
+  comparable: false
 };
 
 init();
@@ -92,6 +107,7 @@ async function init() {
     const result = await loadData();
     state.rows = result.rows;
     state.source = result.source;
+    state.hasFullTankData = result.hasFullTankData;
     if (!state.rows.length) throw new Error("No valid records were found.");
     state.minDate = new Date(state.rows[0].date);
     state.maxDate = new Date(state.rows[state.rows.length - 1].date);
@@ -137,6 +153,13 @@ async function loadData() {
   if (!response.ok) throw new Error("The CSV data file could not be loaded.");
   const csv = await response.text();
   const rawRows = parseCSV(csv.replace(/^\uFEFF/, ""));
+  if (source === "google" && !rawRows.length) {
+    const fallback = await fetch("data/sample.csv", { cache: "no-store" });
+    if (!fallback.ok) throw new Error("The CSV data file could not be loaded.");
+    showNotice("The Google Sheet returned no readable rows, so demonstration data is shown.");
+    const fallbackRows = parseCSV((await fallback.text()).replace(/^\uFEFF/, ""));
+    return { ...normalizeRows(fallbackRows, config.dateOrder), source: "demo" };
+  }
   const normalized = normalizeRows(rawRows, config.dateOrder);
   return { ...normalized, source };
 }
@@ -152,10 +175,12 @@ function bindEvents() {
   elements.vehicle.addEventListener("change", render);
   elements.fuel.addEventListener("change", render);
   elements.metric.addEventListener("change", renderChart);
+  elements.trendToggle.addEventListener("change", renderChart);
   elements.reset.addEventListener("click", () => {
     elements.vehicle.value = "all";
     elements.fuel.value = "all";
     elements.metric.value = "cost";
+    elements.trendToggle.checked = false;
     applyPeriod(config.defaultPeriod);
   });
 }
@@ -213,13 +238,20 @@ function render() {
   const filters = currentFilters();
   state.filtered = filterRows(state.rows, filters);
   const summary = calculateSummary(state.filtered);
-  const previous = calculateSummary(previousPeriod(state.rows, filters.from, filters.to, filters.vehicle, filters.fuel));
+  const comparable = hasComparableHistory(state.rows, filters.from, filters.to);
+  const previousRows = comparable
+    ? previousPeriod(state.rows, filters.from, filters.to, filters.vehicle, filters.fuel)
+    : [];
+  const previous = calculateSummary(previousRows);
+  state.comparable = comparable;
+  state.newVehicles = comparable ? findNewVehicles(state.filtered, previousRows) : [];
   renderPeriodLabel(filters, summary.count);
   renderSummary(summary, previous);
   renderChart();
   renderAnalysis(summary, previous);
   renderBreakdown(summary);
   renderRecords();
+  renderDataQuality();
 }
 
 function currentFilters() {
@@ -251,15 +283,35 @@ function renderSummary(summary, previous) {
 
   if (previous.totalCost > 0) {
     const change = percentageChange(summary.totalCost, previous.totalCost);
-    elements.costContext.textContent = `${signedPercent(change)} vs previous period`;
+    elements.costContext.textContent = `${signedPercent(change)} vs same period last year`;
+  } else if (!state.comparable) {
+    elements.costContext.textContent = "Not enough history to compare";
   } else {
-    elements.costContext.textContent = "Selected period";
+    elements.costContext.textContent = "No change to compare";
   }
 }
 
+function chartRange() {
+  const filters = currentFilters();
+  if (filters.from && filters.to) return { from: filters.from, to: filters.to };
+  return {};
+}
+
 function renderChart() {
-  const monthly = aggregateByMonth(state.filtered);
-  chart.setData(monthly, elements.metric.value);
+  const monthly = aggregateByMonth(state.filtered, chartRange());
+  const useAverage = elements.trendToggle.checked;
+  const metric = elements.metric.value;
+  const data = useAverage
+    ? withRollingAverage(monthly, metric)
+    : monthly;
+  chart.setData(data, metric, useAverage);
+  elements.chartLegend.hidden = !useAverage;
+}
+
+function withRollingAverage(monthly, metric) {
+  const values = monthly.map(month => month.hasData ? month[metric] : null);
+  const averages = rollingAverage(values, 3);
+  return monthly.map((month, index) => ({ ...month, smooth: averages[index] }));
 }
 
 function renderAnalysis(summary, previous) {
@@ -270,18 +322,61 @@ function renderAnalysis(summary, previous) {
     return;
   }
 
-  const months = aggregateByMonth(state.filtered);
+  const months = aggregateByMonth(state.filtered, chartRange()).filter(month => month.hasData);
   const peak = months.reduce((best, month) => month.cost > best.cost ? month : best, months[0]);
+  const filters = currentFilters();
+  const lastYear = state.comparable && filters.from && filters.to ? previousPeriodRange(filters.from, filters.to) : null;
   const costChange = previous.totalCost > 0 ? percentageChange(summary.totalCost, previous.totalCost) : null;
-  const spendSentence = costChange === null
-    ? `You spent ${formatters.currency(summary.totalCost)} on ${formatters.number(summary.totalLiters, 1)} litres across ${summary.count} refuel${summary.count === 1 ? "" : "s"}.`
-    : `You spent ${formatters.currency(summary.totalCost)} on fuel, ${comparisonPhrase(costChange)} in the previous comparable period.`;
+  const comparisonLabel = lastYear ? "the same months last year" : "the previous period";
+
+  let spendSentence;
+  if (costChange === null) {
+    spendSentence = `You spent ${formatters.currency(summary.totalCost)} on ${formatters.number(summary.totalLiters, 1)} litres across ${summary.count} refuel${summary.count === 1 ? "" : "s"}.`;
+  } else {
+    spendSentence = `You spent ${formatters.currency(summary.totalCost)} on fuel, ${comparisonPhrase(costChange)} ${comparisonLabel}.`;
+  }
+
   const peakSentence = `${formatters.longMonth(peak.date)} was the highest-spend month at ${formatters.currency(peak.cost)}.`;
-  elements.analysisCopy.textContent = `${spendSentence} ${peakSentence}`;
+  const explainSentence = costChange === null ? "" : explainChange(summary, previous);
+  const fleetSentence = state.newVehicles.length
+    ? `${state.newVehicles.join(" and ")} ${state.newVehicles.length === 1 ? "has" : "have"} no refuels in the comparison period, so part of this change is a change in what you drive rather than how much you spend.`
+    : "";
+  const coverageSentence = !state.comparable && filters.from && filters.to
+    ? "No data exists for the same months a year earlier, so no year-on-year comparison is shown."
+    : "";
+  elements.analysisCopy.textContent = [spendSentence, explainSentence, fleetSentence, peakSentence, coverageSentence].filter(Boolean).join(" ");
 
   addInsight(formatters.currency(summary.averagePrice), "Average price per litre");
   addInsight(formatters.currency(summary.count ? summary.totalCost / summary.count : 0), "Average cost per refuel");
-  addInsight(`${Math.round(summary.fullTankRate * 100)}%`, "Full-tank refuels");
+
+  if (state.hasFullTankData) {
+    addInsight(`${Math.round(summary.fullTankRate * 100)}%`, "Full-tank refuels");
+  } else {
+    addInsight(formatters.number(summary.totalLiters / Math.max(1, uniqueDays(state.filtered))), "Litres per refuel day");
+  }
+}
+
+function explainChange(current, previous) {
+  if (!previous.totalLiters) return "";
+  const split = decomposeCostChange(current, previous);
+  if (Math.abs(split.costDelta) < 0.5) return "Spending is essentially unchanged.";
+
+  const direction = split.costDelta > 0 ? "more" : "less";
+  const volumePart = Math.round(split.volumeEffect);
+  const pricePart = Math.round(split.priceEffect);
+
+  const volumeText = Math.abs(volumePart) < 1
+    ? "fuel volume was steady"
+    : `buying ${formatters.number(Math.abs(current.totalLiters - previous.totalLiters), 1)} ${current.totalLiters >= previous.totalLiters ? "more" : "fewer"} litres accounted for ${split.volumeEffect > 0 ? "+" : "−"}${formatters.currency(Math.abs(volumePart))}`;
+  const priceText = Math.abs(pricePart) < 1
+    ? "with no price impact"
+    : `price per litre ${split.priceEffect < 0 ? "saved" : "cost"} ${formatters.currency(Math.abs(pricePart))}`;
+
+  return `You spent ${formatters.currency(Math.abs(split.costDelta))} ${direction}; ${volumeText}, ${priceText}.`;
+}
+
+function uniqueDays(rows) {
+  return new Set(rows.map(row => row.date.toDateString())).size;
 }
 
 function addInsight(value, label) {
@@ -297,6 +392,7 @@ function addInsight(value, label) {
 
 function renderBreakdown(summary) {
   elements.breakdownList.replaceChildren();
+  elements.vehicleSummary.replaceChildren();
   if (!summary.count) {
     const empty = document.createElement("p");
     empty.className = "period-label";
@@ -305,10 +401,12 @@ function renderBreakdown(summary) {
     return;
   }
 
-  let groups = groupCost(state.filtered, "fuelType");
-  if (groups.length === 1 && new Set(state.filtered.map(row => row.vehicle)).size > 1) {
-    groups = groupCost(state.filtered, "vehicle");
-  }
+  const fuelGroups = groupCost(state.filtered, "fuelType");
+  const vehicleCount = new Set(state.filtered.map(row => row.vehicle)).size;
+  const groups = fuelGroups.length > 1 || vehicleCount === 1
+    ? fuelGroups
+    : groupCost(state.filtered, "vehicle");
+
   groups.forEach(group => {
     const share = summary.totalCost ? group.value / summary.totalCost : 0;
     const item = document.createElement("div");
@@ -330,6 +428,68 @@ function renderBreakdown(summary) {
     item.append(label, value, track);
     elements.breakdownList.append(item);
   });
+
+  renderVehicleSummary(summary);
+}
+
+function renderVehicleSummary(summary) {
+  const vehicles = summarizeByVehicle(state.filtered);
+  if (vehicles.length < 2) return;
+
+  vehicles.forEach(vehicle => {
+    const burn = computeBurnRate(state.filtered.filter(row => row.vehicle === vehicle.label));
+    const row = document.createElement("div");
+    row.className = "vehicle-row";
+
+    const header = document.createElement("div");
+    header.className = "vehicle-row-header";
+    const name = document.createElement("strong");
+    name.textContent = vehicle.label;
+    const share = document.createElement("span");
+    share.className = "vehicle-share";
+    share.textContent = `${Math.round(vehicle.costShare * 100)}% of spend · ${Math.round(vehicle.visitsShare * 100)}% of refuels`;
+    header.append(name, share);
+
+    const stats = document.createElement("dl");
+    stats.className = "vehicle-stats";
+    const pairs = [
+      [formatters.currency(vehicle.cost), "Spent"],
+      [`${formatters.number(vehicle.liters, 1)} L`, "Litres"],
+      [formatters.number(vehicle.visits), "Refuels"],
+      [formatters.currency(vehicle.costPerVisit), "Per refuel"]
+    ];
+    if (burn) pairs.push([`${formatters.number(burn.litersPerDay, 2)} L`, "Per day"]);
+
+    pairs.forEach(([value, label]) => {
+      const group = document.createElement("div");
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      detail.textContent = value;
+      group.append(term, detail);
+      stats.append(group);
+    });
+
+    row.append(header, stats);
+    elements.vehicleSummary.append(row);
+  });
+}
+
+function renderDataQuality() {
+  const warnings = findDataWarnings(state.filtered);
+  elements.qualityList.replaceChildren();
+  if (!warnings.length) {
+    elements.dataQuality.hidden = true;
+    return;
+  }
+
+  warnings.forEach(warning => {
+    const item = document.createElement("li");
+    item.className = `quality-item ${warning.type}`;
+    item.textContent = warning.message;
+    elements.qualityList.append(item);
+  });
+  elements.dataQuality.hidden = false;
 }
 
 function renderRecords() {

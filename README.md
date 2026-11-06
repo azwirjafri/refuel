@@ -6,14 +6,41 @@ A lightweight, dependency-free dashboard for petrol refuel data stored in Google
 
 - Duration presets and custom date range
 - Vehicle and fuel-type filters
-- Monthly cost, litres, and price-per-litre chart
+- Monthly cost, litres, price-per-litre, and cost-per-day chart
+- Optional three-month rolling average on the chart
+- Like-for-like comparison against the same months one year earlier
+- Cost-change explanation split into volume and price effects
+- Per-vehicle summary with spend share, litres, refuels, and fuel used per day
 - Dynamic summary and previous-period comparison
 - Fuel or vehicle cost breakdown
+- Data-quality notes for duplicate and unusually small refuels
 - Latest matching refuel records
 - Responsive layout, accessible controls, and reduced-motion support
 - No analytics, cookies, API keys, or third-party runtime dependencies
 
+## How the comparison works
+
+The dashboard compares the selected period with **the same calendar months one year
+earlier**, then explains any change in spending as a combination of two effects:
+
+- **Volume effect** — litres bought changed.
+- **Price effect** — the price per litre changed.
+
+Together they add up to the total change, so an increase caused by driving more is not
+mistaken for an increase caused by fuel getting more expensive.
+
+Two cases are handled explicitly rather than showing a misleading percentage:
+
+- If the sheet has no records a year before the selected period, the comparison is
+  replaced with "Not enough history to compare".
+- If a vehicle has refuels in the selected period but none in the comparison period,
+  the analysis states that part of the change comes from a change in what is driven.
+
+Months with no refuel records are drawn as gaps instead of being silently omitted, so
+infrequent fill periods do not look like continuous history.
+
 ## 1. Prepare the Google Sheet
+
 
 The first row must contain these headers:
 
@@ -93,9 +120,16 @@ All safe-to-publish settings are in `config.js`:
 
 ## Tests
 
-The data parser and calculation tests use Node's built-in test runner and require no package installation:
+The data parser, comparison, and calculation tests use Node's built-in test runner and
+require no package installation:
 
 ```powershell
 npm test
 ```
+
+Coverage includes CSV parsing, header normalisation, date parsing (including timestamps),
+local-date record IDs, month gap filling, like-for-like comparison windows, cost
+decomposition, per-vehicle summaries, tank-to-tank fuel use, rolling averages, and
+data-quality warnings.
+
 "# refuel" 

@@ -59,6 +59,17 @@ function getValue(row, field) {
   return "";
 }
 
+function hasField(row, field) {
+  return HEADER_ALIASES[field].some(alias => Object.hasOwn(row, normalizeHeader(alias)));
+}
+
+export function dateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function parseNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
   const cleaned = String(value ?? "")
@@ -70,7 +81,9 @@ function parseNumber(value) {
 }
 
 export function parseDate(value, dateOrder = "DMY") {
-  const raw = String(value ?? "").trim();
+  const full = String(value ?? "").trim();
+  if (!full) return null;
+  const raw = full.replace(/[T\s]+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?\s*(?:[ap]m)?\s*(?:z|[+-]\d{2}:?\d{2})?$/i, "");
   if (!raw) return null;
 
   const isoMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
@@ -104,6 +117,7 @@ function titleCase(value, fallback) {
 export function normalizeRows(rawRows, dateOrder = "DMY") {
   const valid = [];
   const issues = [];
+  const hasFullTankData = rawRows.some(row => hasField(row, "fullTank"));
 
   rawRows.forEach((row, index) => {
     const date = parseDate(getValue(row, "date"), dateOrder);
@@ -120,7 +134,7 @@ export function normalizeRows(rawRows, dateOrder = "DMY") {
     const fullTankRaw = String(getValue(row, "fullTank")).trim().toLowerCase();
 
     valid.push({
-      id: `${date.toISOString().slice(0, 10)}-${index}`,
+      id: `${dateKey(date)}-${index}`,
       date,
       liters,
       totalCost,
@@ -134,7 +148,7 @@ export function normalizeRows(rawRows, dateOrder = "DMY") {
   });
 
   valid.sort((a, b) => a.date - b.date);
-  return { rows: valid, issues };
+  return { rows: valid, issues, hasFullTankData };
 }
 
 export function filterRows(rows, filters) {
@@ -146,12 +160,19 @@ export function filterRows(rows, filters) {
   });
 }
 
-export function aggregateByMonth(rows) {
+export function aggregateByMonth(rows, range = {}) {
   const monthMap = new Map();
   rows.forEach(row => {
     const key = `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, "0")}`;
     if (!monthMap.has(key)) {
-      monthMap.set(key, { key, date: new Date(row.date.getFullYear(), row.date.getMonth(), 1), cost: 0, liters: 0, visits: 0 });
+      monthMap.set(key, {
+        key,
+        date: new Date(row.date.getFullYear(), row.date.getMonth(), 1),
+        cost: 0,
+        liters: 0,
+        visits: 0,
+        hasData: true
+      });
     }
     const month = monthMap.get(key);
     month.cost += row.totalCost;
@@ -159,9 +180,27 @@ export function aggregateByMonth(rows) {
     month.visits += 1;
   });
 
-  return [...monthMap.values()]
-    .sort((a, b) => a.date - b.date)
-    .map(month => ({ ...month, price: month.liters ? month.cost / month.liters : 0 }));
+  const dates = [...monthMap.values()].map(month => month.date).sort((a, b) => a - b);
+  const startSource = range.from || dates[0];
+  const endSource = range.to || dates[dates.length - 1];
+  if (!startSource || !endSource) return [];
+
+  const cursor = new Date(startSource.getFullYear(), startSource.getMonth(), 1);
+  const end = new Date(endSource.getFullYear(), endSource.getMonth(), 1);
+
+  const months = [];
+  while (cursor <= end) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    const month = monthMap.get(key) || { key, date: new Date(cursor), cost: 0, liters: 0, visits: 0, hasData: false };
+    const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+    months.push({
+      ...month,
+      perDay: month.cost / daysInMonth,
+      price: month.liters ? month.cost / month.liters : 0
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return months;
 }
 
 export function calculateSummary(rows) {
@@ -185,11 +224,160 @@ export function groupCost(rows, field) {
     .sort((a, b) => b.value - a.value);
 }
 
+function shiftYear(date, years) {
+  const year = date.getFullYear() + years;
+  const month = date.getMonth();
+  const day = Math.min(date.getDate(), new Date(year, month + 1, 0).getDate());
+  return new Date(year, month, day);
+}
+
+export function previousPeriodRange(from, to) {
+  return { from: shiftYear(from, -1), to: shiftYear(to, -1) };
+}
+
+export function hasComparableHistory(rows, from, to) {
+  if (!from || !to || !rows.length) return false;
+  const earliest = rows.reduce((min, row) => row.date < min ? row.date : min, rows[0].date);
+  return shiftYear(from, -1) >= new Date(earliest.getFullYear(), earliest.getMonth(), earliest.getDate());
+}
+
 export function previousPeriod(rows, from, to, vehicle = "all", fuel = "all") {
   if (!from || !to) return [];
-  const duration = to.getTime() - from.getTime();
-  const previousTo = new Date(from);
-  previousTo.setDate(previousTo.getDate() - 1);
-  const previousFrom = new Date(previousTo.getTime() - duration);
-  return filterRows(rows, { from: previousFrom, to: previousTo, vehicle, fuel });
+  const range = previousPeriodRange(from, to);
+  return filterRows(rows, { ...range, vehicle, fuel });
+}
+
+export function findNewVehicles(currentRows, previousRows) {
+  const before = new Set(previousRows.map(row => row.vehicle));
+  const added = new Set();
+  currentRows.forEach(row => {
+    if (!before.has(row.vehicle)) added.add(row.vehicle);
+  });
+  return [...added].sort();
+}
+
+export function decomposeCostChange(current, previous) {  const costDelta = current.totalCost - previous.totalCost;
+  const volumeEffect = (current.totalLiters - previous.totalLiters) * previous.averagePrice;
+  const priceEffect = (current.averagePrice - previous.averagePrice) * current.totalLiters;
+  return { costDelta, volumeEffect, priceEffect };
+}
+
+export function summarizeByVehicle(rows) {
+  const totalCost = rows.reduce((sum, row) => sum + row.totalCost, 0);
+  const groups = new Map();
+  rows.forEach(row => {
+    if (!groups.has(row.vehicle)) groups.set(row.vehicle, []);
+    groups.get(row.vehicle).push(row);
+  });
+
+  return [...groups.entries()]
+    .map(([label, vehicleRows]) => {
+      const cost = vehicleRows.reduce((sum, row) => sum + row.totalCost, 0);
+      const liters = vehicleRows.reduce((sum, row) => sum + row.liters, 0);
+      const first = new Date(vehicleRows[0].date);
+      const last = new Date(vehicleRows[vehicleRows.length - 1].date);
+      const days = Math.max(1, (last - first) / 86400000);
+      return {
+        label,
+        cost,
+        liters,
+        visits: vehicleRows.length,
+        costShare: totalCost ? cost / totalCost : 0,
+        visitsShare: rows.length ? vehicleRows.length / rows.length : 0,
+        averagePrice: liters ? cost / liters : 0,
+        costPerVisit: cost / vehicleRows.length,
+        litersPerDay: liters / days,
+        costPerDay: cost / days
+      };
+    })
+    .sort((a, b) => b.cost - a.cost);
+}
+
+export function computeBurnRate(rows) {
+  const sorted = [...rows].sort((a, b) => a.date - b.date);
+  const fullTanks = sorted.filter(row => row.fullTank);
+  if (fullTanks.length < 2) return null;
+
+  let liters = 0;
+  let days = 0;
+  let samples = 0;
+  for (let i = 1; i < fullTanks.length; i += 1) {
+    const start = fullTanks[i - 1];
+    const end = fullTanks[i];
+    const gap = (end.date - start.date) / 86400000;
+    if (!gap || gap > 45) continue;
+    const between = sorted.filter(row => row.date > start.date && row.date < end.date);
+    const filled = end.liters + between.reduce((sum, row) => sum + row.liters, 0);
+    liters += filled;
+    days += gap;
+    samples += 1;
+  }
+  if (!samples) return null;
+  return { litersPerDay: liters / days, samples };
+}
+
+export function rollingAverage(values, window = 3) {
+  return values.map((_, index) => {
+    if (index < window - 1) return null;
+    let total = 0;
+    for (let offset = index - window + 1; offset <= index; offset += 1) {
+      const value = values[offset];
+      if (value === null || value === undefined) return null;
+      total += value;
+    }
+    return total / window;
+  });
+}
+
+export function findDataWarnings(rows) {
+  const warnings = [];
+
+  const sameDay = new Map();
+  rows.forEach(row => {
+    const key = `${dateKey(row.date)}|${row.vehicle}`;
+    if (!sameDay.has(key)) sameDay.set(key, []);
+    sameDay.get(key).push(row);
+  });
+  sameDay.forEach(group => {
+    if (group.length > 1) {
+      warnings.push({
+        type: "duplicate",
+        count: group.length - 1,
+        message: `${group.length} refuels were recorded for ${group[0].vehicle} on ${dateKey(group[0].date)}.`
+      });
+    }
+  });
+
+  const groups = new Map();
+  rows.forEach(row => {
+    if (!groups.has(row.vehicle)) groups.set(row.vehicle, []);
+    groups.get(row.vehicle).push(row);
+  });
+  groups.forEach((vehicleRows, vehicle) => {
+    if (vehicleRows.length < 6) return;
+    const sorted = vehicleRows.map(row => row.liters).sort((a, b) => a - b);
+    const quarter = (percent) => {
+      const position = (sorted.length - 1) * percent;
+      const lower = Math.floor(position);
+      const upper = Math.ceil(position);
+      return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+    };
+    const q1 = quarter(0.25);
+    const q3 = quarter(0.75);
+    const spread = q3 - q1;
+    const low = q1 - 1.5 * spread;
+    let count = 0;
+    vehicleRows.forEach(row => {
+      if (row.liters < low) count += 1;
+    });
+    if (count) {
+      warnings.push({
+        type: "outlier",
+        count,
+        message: `${count} ${vehicle} refuel${count === 1 ? " was" : "s were"} much smaller than usual and may be partial fills.`
+      });
+    }
+  });
+
+  return warnings;
 }
